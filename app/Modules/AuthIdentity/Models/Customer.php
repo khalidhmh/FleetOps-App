@@ -18,10 +18,10 @@ class Customer extends Model
 {
     use HasFactory;
 
-    protected $table      = 'customers';
+    protected $table = 'customers';
     protected $primaryKey = 'customer_id';
-    protected $keyType    = 'int';
-    public $incrementing  = false; // PK is also a FK — no auto-increment
+    protected $keyType = 'int';
+    public $incrementing = false; // PK is also a FK — no auto-increment
 
     // No UpdatedAt in DDL
     const UPDATED_AT = null;
