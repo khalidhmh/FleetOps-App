@@ -13,8 +13,11 @@ use App\Http\Controllers\Controller;
 use App\Modules\AuthIdentity\Services\AuthService;
 use App\Modules\AuthIdentity\Requests\LoginRequest;
 use App\Modules\AuthIdentity\Requests\PasswordResetRequest;
+use App\Modules\LoggingAudit\Models\SystemLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
@@ -33,10 +36,59 @@ class AuthController extends Controller
      */
     public function login(LoginRequest $request): JsonResponse
     {
-        // TODO: Implement login
-        // 1. $data = $this->authService->login($request->email, $request->password)
-        // 2. Return: response()->json(['success' => true, 'message' => 'تم تسجيل الدخول بنجاح', 'data' => $data], 200)
-        // 3. Catch Exception: return response()->json(['success' => false, 'message' => $e->getMessage()], 401)
+        try {
+            // ── Attempt authentication ────────────────────────────────────────
+            $credentials = $request->only('email', 'password');
+
+            if (!Auth::attempt($credentials)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid credentials.',
+                ], 401);
+            }
+
+            // ── Session Fixation Protection ───────────────────────────────────
+            // Regenerate the session ID immediately after a confirmed login.
+            // This invalidates any pre-authentication session ID that an
+            // attacker may have injected (OWASP A07: Session Fixation).
+            $request->session()->regenerate();
+
+            // ── Delegate token issuance to AuthService ────────────────────────
+            $data = $this->authService->login($request->email, $request->password);
+
+            // ── Audit Log — Successful Login ──────────────────────────────────
+            $correlationId = $request->header('X-Correlation-ID')
+                          ?? $request->header('X-Request-ID')
+                          ?? (string) Str::uuid();
+
+            SystemLog::create([
+                'level'          => 'info',
+                'channel'        => 'audit',
+                'message'        => sprintf('[AUTH] Successful login — user_id: %d', Auth::id()),
+                'context'        => [
+                    'ip'         => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                    'email'      => $request->email,
+                ],
+                'correlation_id' => $correlationId,
+                'user_id'        => Auth::id(),
+                'module'         => 'AuthIdentity',
+                'request_uri'    => $request->getRequestUri(),
+                'duration_ms'    => null,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم تسجيل الدخول بنجاح',
+                'data'    => $data,
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 401);
+        }
     }
 
     /**

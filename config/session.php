@@ -169,7 +169,9 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    // ── Security: HTTPS-only session cookie ──
+    // Set SESSION_SECURE_COOKIE=false in .env for local HTTP development only.
+    'secure' => env('SESSION_SECURE_COOKIE', true),
 
     /*
     |--------------------------------------------------------------------------
