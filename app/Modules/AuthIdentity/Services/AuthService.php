@@ -1,142 +1,233 @@
 <?php
 
 /**
- * @file: AuthService.php
- * @description: خدمة المصادقة - تسجيل الدخول والخروج وإدارة التوكنات
- * @module: AuthIdentity
- * @author: Team Leader (Khalid)
+ * @file AuthService.php
+ * @description خدمة المصادقة — تسجيل دخول/خروج بـ Sanctum + حماية Brute-force
+ * @module AuthIdentity
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\AuthIdentity\Services;
 
 use App\Modules\AuthIdentity\Repositories\UserRepository;
+use App\Modules\LoggingAudit\Services\LogService;
+use App\Modules\LoggingAudit\Services\AuditService;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\Mail;
 use Exception;
 
 class AuthService
 {
-    protected UserRepository $userRepository;
+    /** Max failed attempts before locking the account */
+    protected const MAX_ATTEMPTS    = 5;
 
-    public function __construct(UserRepository $userRepository)
-    {
+    /** Lock duration in minutes */
+    protected const LOCK_MINUTES    = 15;
+
+    protected UserRepository $userRepository;
+    protected LogService     $logService;
+    protected AuditService   $auditService;
+
+    public function __construct(
+        UserRepository $userRepository,
+        LogService     $logService,
+        AuditService   $auditService
+    ) {
         $this->userRepository = $userRepository;
+        $this->logService     = $logService;
+        $this->auditService   = $auditService;
     }
 
     /**
-     * تسجيل دخول المستخدم (AUTH-01 / AUTH-02)
-     * @param string $email
-     * @param string $password
-     * @return array ['token' => string, 'user' => User, 'token_type' => 'Bearer']
+     * تسجيل دخول المستخدم — يعيد توكن Sanctum + بيانات المستخدم
+     *
+     * @return array{token: string, token_type: string, user: \App\Modules\AuthIdentity\Models\User}
      * @throws Exception
      */
     public function login(string $email, string $password): array
     {
-        // TODO: Implement login
-        // 1. Find user by email: $user = $this->userRepository->findByEmail($email)
-        // 2. If not found or inactive → throw Exception('بيانات الدخول غير صحيحة')
-        // 3. Check if user is locked: $user->isLocked() → throw Exception('الحساب مقفل مؤقتاً')
-        // 4. Verify password: Hash::check($password, $user->password)
-        //    - If wrong → increment failed attempts, lock if >= MAX_ATTEMPTS → throw Exception
-        // 5. Reset failed attempts: $this->userRepository->updateLastLogin($user->user_id)
-        // 6. Create Sanctum token: $token = $user->createToken('auth_token')->plainTextToken
-        // 7. Return ['token' => $token, 'token_type' => 'Bearer', 'user' => $user]
+        // 1. Find user
+        $user = $this->userRepository->findByEmail($email);
+
+        if (!$user || !$user->is_active) {
+            $this->logService->logSecurity('failed_login', [
+                'email'  => $email,
+                'reason' => $user ? 'account_inactive' : 'user_not_found',
+            ]);
+            throw new Exception('بيانات الدخول غير صحيحة');
+        }
+
+        // 2. Brute-force protection — check lock
+        if (
+            isset($user->locked_until) &&
+            $user->locked_until !== null &&
+            now()->lt($user->locked_until)
+        ) {
+            $this->logService->logSecurity('account_locked', [
+                'user_id'     => $user->user_id,
+                'locked_until' => $user->locked_until,
+            ]);
+            throw new Exception('الحساب مقفل مؤقتاً. يرجى المحاولة بعد ' . self::LOCK_MINUTES . ' دقيقة.');
+        }
+
+        // 3. Verify password
+        if (!Hash::check($password, $user->password)) {
+            $attempts = ($user->failed_login_attempts ?? 0) + 1;
+            $this->userRepository->updateFailedAttempts($user->user_id, $attempts);
+
+            if ($attempts >= self::MAX_ATTEMPTS) {
+                $lockUntil = now()->addMinutes(self::LOCK_MINUTES)->toDateTime();
+                $this->userRepository->lockUser($user->user_id, $lockUntil);
+                $this->logService->logSecurity('account_locked', [
+                    'user_id'  => $user->user_id,
+                    'attempts' => $attempts,
+                ]);
+                throw new Exception('تم قفل الحساب بسبب محاولات دخول متكررة. حاول بعد ' . self::LOCK_MINUTES . ' دقيقة.');
+            }
+
+            $this->logService->logSecurity('failed_login', [
+                'user_id'  => $user->user_id,
+                'attempts' => $attempts,
+            ]);
+            throw new Exception('بيانات الدخول غير صحيحة');
+        }
+
+        // 4. Reset failed attempts + update last login
+        $this->userRepository->updateLastLogin($user->user_id);
+
+        // 5. Revoke previous tokens + issue new Sanctum token
+        $user->tokens()->delete();
+        $plainToken = $user->createToken('fleet_auth_token')->plainTextToken;
+
+        // 6. Write audit log
+        $this->auditService->log(
+            action:     'login',
+            entityType: 'user',
+            entityId:   $user->user_id,
+            afterState: ['email' => $user->email, 'role' => $user->role],
+            userId:     $user->user_id,
+            module:     'AuthIdentity'
+        );
+
+        return [
+            'token'      => $plainToken,
+            'token_type' => 'Bearer',
+            'user'       => $user,
+        ];
     }
 
     /**
-     * تسجيل خروج المستخدم (AUTH-05)
-     * @param int $userId
-     * @return bool
-     * @throws Exception
+     * تسجيل خروج الجهاز الحالي
      */
     public function logout(int $userId): bool
     {
-        // TODO: Implement logout
-        // 1. Find user: $user = $this->userRepository->findByIdOrFail($userId)
-        // 2. Revoke current token: $user->currentAccessToken()->delete()
-        // 3. Return true
+        $user = $this->userRepository->findByIdOrFail($userId);
+        $user->currentAccessToken()->delete();
+
+        $this->auditService->log('logout', 'user', $userId, module: 'AuthIdentity');
+
+        $this->logService->info('[AUTH] User logged out', ['user_id' => $userId], 'AuthIdentity');
+
+        return true;
     }
 
     /**
-     * تسجيل خروج من جميع الأجهزة (AUTH-05)
-     * @param int $userId
-     * @return bool
-     * @throws Exception
+     * تسجيل خروج من جميع الأجهزة
      */
     public function logoutAll(int $userId): bool
     {
-        // TODO: Implement logout from all devices
-        // 1. Find user: $user = $this->userRepository->findByIdOrFail($userId)
-        // 2. Revoke all tokens: $user->tokens()->delete()
-        // 3. Return true
+        $user = $this->userRepository->findByIdOrFail($userId);
+        $user->tokens()->delete();
+
+        $this->auditService->log('logout_all', 'user', $userId, module: 'AuthIdentity');
+
+        $this->logService->info('[AUTH] User logged out all devices', ['user_id' => $userId], 'AuthIdentity');
+
+        return true;
     }
 
     /**
-     * تحديث التوكن (AUTH-04)
-     * @param int $userId
-     * @return array ['token' => string]
-     * @throws Exception
+     * تحديث التوكن (rotate)
      */
     public function refreshToken(int $userId): array
     {
-        // TODO: Implement token refresh
-        // 1. Find user
-        // 2. Delete current token: $user->currentAccessToken()->delete()
-        // 3. Create new token: $newToken = $user->createToken('auth_token')->plainTextToken
-        // 4. Return ['token' => $newToken, 'token_type' => 'Bearer']
+        $user = $this->userRepository->findByIdOrFail($userId);
+
+        // Revoke current token and issue a new one
+        $user->currentAccessToken()->delete();
+        $newToken = $user->createToken('fleet_auth_token')->plainTextToken;
+
+        $this->logService->info('[AUTH] Token refreshed', ['user_id' => $userId], 'AuthIdentity');
+
+        return [
+            'token'      => $newToken,
+            'token_type' => 'Bearer',
+        ];
     }
 
     /**
-     * طلب إعادة تعيين كلمة المرور (AUTH-06)
-     * @param string $email
-     * @return bool
-     * @throws Exception
+     * طلب إعادة تعيين كلمة المرور — يرسل إيميل بالرابط
      */
     public function requestPasswordReset(string $email): bool
     {
-        // TODO: Implement forgot password
-        // 1. Find user by email
-        // 2. Generate reset token: Password::broker()->createToken($user)
-        // 3. Send reset email via Mail facade with the token link
-        // 4. Store token in password_reset_tokens table (Laravel default)
-        // 5. Return true
+        $user = $this->userRepository->findByEmail($email);
+
+        if (!$user) {
+            // Return true to avoid user enumeration attacks
+            return true;
+        }
+
+        $status = Password::broker()->sendResetLink(['email' => $email]);
+
+        $this->logService->info('[AUTH] Password reset requested', ['email' => $email], 'AuthIdentity');
+
+        return $status === Password::RESET_LINK_SENT;
     }
 
     /**
-     * إعادة تعيين كلمة المرور (AUTH-06)
-     * @param string $token
-     * @param string $email
-     * @param string $newPassword
-     * @return bool
-     * @throws Exception
+     * إعادة تعيين كلمة المرور بالتوكن
      */
     public function resetPassword(string $token, string $email, string $newPassword): bool
     {
-        // TODO: Implement password reset
-        // 1. Validate reset token via Password::broker()->tokenExists($user, $token)
-        // 2. Hash new password: Hash::make($newPassword)
-        // 3. Update user password via userRepository->update()
-        // 4. Delete the reset token: Password::broker()->deleteToken($user)
-        // 5. Revoke all active tokens: $user->tokens()->delete()
-        // 6. Return true
+        $status = Password::broker()->reset(
+            ['email' => $email, 'password' => $newPassword, 'token' => $token],
+            function ($user, $password) {
+                $user->password = \Illuminate\Support\Facades\Hash::make($password);
+                $user->save();
+                $user->tokens()->delete(); // Revoke all tokens after reset
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            throw new Exception('رابط إعادة التعيين غير صالح أو منتهي الصلاحية');
+        }
+
+        $this->logService->logSecurity('password_reset', ['email' => $email], 'AuthIdentity');
+
+        return true;
     }
 
     /**
-     * تغيير كلمة المرور (authenticated user)
-     * @param int $userId
-     * @param string $currentPassword
-     * @param string $newPassword
-     * @return bool
-     * @throws Exception
+     * تغيير كلمة المرور للمستخدم المسجل
      */
     public function changePassword(int $userId, string $currentPassword, string $newPassword): bool
     {
-        // TODO: Implement change password
-        // 1. Find user: $user = $this->userRepository->findByIdOrFail($userId)
-        // 2. Verify current password: Hash::check($currentPassword, $user->password)
-        //    → If wrong: throw Exception('كلمة المرور الحالية غير صحيحة')
-        // 3. Update password: userRepository->update($userId, ['password' => Hash::make($newPassword)])
-        // 4. Revoke all other tokens (keep current)
-        // 5. Return true
+        $user = $this->userRepository->findByIdOrFail($userId);
+
+        if (!Hash::check($currentPassword, $user->password)) {
+            throw new Exception('كلمة المرور الحالية غير صحيحة');
+        }
+
+        $this->userRepository->update($userId, [
+            'password' => Hash::make($newPassword),
+        ]);
+
+        // Revoke all tokens — force re-login on all devices
+        $user->tokens()->delete();
+
+        $this->logService->logSecurity('password_changed', ['user_id' => $userId], 'AuthIdentity');
+
+        return true;
     }
 }

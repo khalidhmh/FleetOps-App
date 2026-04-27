@@ -15,8 +15,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     public function up(): void
     {
         Schema::create('orders', function (Blueprint $table) {
@@ -57,11 +56,12 @@ return new class extends Migration
             // DDL: Created_at datetime2 NULL (no UpdatedAt in DDL)
             $table->dateTime('created_at')->nullable();
 
-            // FK_Orders_Customers → customers.customer_id (no cascade in DDL)
-            $table->foreign('customer_id')->references('customer_id')->on('customers')->nullOnDelete();
+            // FK_Orders_Customers → customers.customer_id
+            // تم التغيير لـ noActionOnDelete لتجنب مشاكل SQL Server مع الـ Cascade Paths
+            $table->foreign('customer_id')->references('customer_id')->on('customers')->noActionOnDelete();
 
-            // FK_Orders_Drivers → drivers.driver_id (no cascade in DDL)
-            $table->foreign('driver_id')->references('driver_id')->on('drivers')->nullOnDelete();
+            // FK_Orders_Drivers → drivers.driver_id
+            $table->foreign('driver_id')->references('driver_id')->on('drivers')->noActionOnDelete();
         });
     }
 

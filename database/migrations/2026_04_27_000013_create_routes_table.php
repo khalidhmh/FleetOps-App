@@ -11,8 +11,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     public function up(): void
     {
         Schema::create('routes', function (Blueprint $table) {
@@ -22,13 +21,13 @@ return new class extends Migration
             // DDL: RouteName nvarchar(200) NOT NULL
             $table->string('route_name', 200);
 
-            // DDL: DriverID bigint NULL FK → drivers (no cascade in DDL)
+            // DDL: DriverID bigint NULL FK → drivers
             $table->unsignedBigInteger('driver_id')->nullable();
 
-            // DDL: DispatcherID bigint NULL FK → dispatchers (no cascade in DDL)
+            // DDL: DispatcherID bigint NULL FK → dispatchers
             $table->unsignedBigInteger('dispatcher_id')->nullable();
 
-            // DDL: VehicleID bigint NULL FK → vehicles (no cascade in DDL)
+            // DDL: VehicleID bigint NULL FK → vehicles
             $table->unsignedBigInteger('vehicle_id')->nullable();
 
             // DDL: ScheduledStartTime datetime2 NULL
@@ -52,13 +51,14 @@ return new class extends Migration
             // DDL: FuelConsumptionEst decimal(8,2) NULL
             $table->decimal('fuel_consumption_est', 8, 2)->nullable();
 
-            // DDL: CreatedAt datetime2 DEFAULT getdate() NULL (no UpdatedAt in DDL)
+            // DDL: CreatedAt datetime2 DEFAULT getdate() NULL
             $table->dateTime('created_at')->nullable();
 
-            // FK → drivers, dispatchers, vehicles (no cascade in DDL)
-            $table->foreign('driver_id')->references('driver_id')->on('drivers')->nullOnDelete();
-            $table->foreign('dispatcher_id')->references('dispatcher_id')->on('dispatchers')->nullOnDelete();
-            $table->foreign('vehicle_id')->references('vehicle_id')->on('vehicles')->nullOnDelete();
+            // القيود الخارجية FK (تم تعديلها لتوافق SQL Server)
+            // تم استخدام noActionOnDelete() بدلاً من nullOnDelete لتجنب تعارض مسارات الحذف
+            $table->foreign('driver_id')->references('driver_id')->on('drivers')->noActionOnDelete();
+            $table->foreign('dispatcher_id')->references('dispatcher_id')->on('dispatchers')->noActionOnDelete();
+            $table->foreign('vehicle_id')->references('vehicle_id')->on('vehicles')->noActionOnDelete();
         });
     }
 

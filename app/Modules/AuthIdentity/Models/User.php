@@ -18,10 +18,10 @@ class User extends Authenticatable
 {
     use HasApiTokens, HasFactory;
 
-    protected $table      = 'users';
+    protected $table = 'users';
     protected $primaryKey = 'user_id';
-    protected $keyType    = 'int';
-    public $incrementing  = true;
+    protected $keyType = 'int';
+    public $incrementing = true;
 
     // Eloquent uses created_at / updated_at by default — matches DDL columns
     public $timestamps = true;
@@ -47,7 +47,7 @@ class User extends Authenticatable
 
     /** @var array<string, string> */
     protected $casts = [
-        'is_active'  => 'boolean',
+        'is_active' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];

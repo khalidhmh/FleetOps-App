@@ -1,10 +1,10 @@
 <?php
 
 /**
- * @file: AuthController.php
- * @description: متحكم المصادقة - تسجيل الدخول والخروج والتوكنات
- * @module: AuthIdentity
- * @author: Team Leader (Khalid)
+ * @file AuthController.php
+ * @description متحكم المصادقة — login/logout/refresh/password مع Sanctum + Audit Logging
+ * @module AuthIdentity
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\AuthIdentity\Controllers;
@@ -13,7 +13,7 @@ use App\Http\Controllers\Controller;
 use App\Modules\AuthIdentity\Services\AuthService;
 use App\Modules\AuthIdentity\Requests\LoginRequest;
 use App\Modules\AuthIdentity\Requests\PasswordResetRequest;
-use App\Modules\LoggingAudit\Models\SystemLog;
+use App\Modules\LoggingAudit\Services\LogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -22,68 +22,49 @@ use Illuminate\Support\Str;
 class AuthController extends Controller
 {
     protected AuthService $authService;
+    protected LogService  $logService;
 
-    public function __construct(AuthService $authService)
+    public function __construct(AuthService $authService, LogService $logService)
     {
         $this->authService = $authService;
+        $this->logService  = $logService;
     }
 
     /**
-     * تسجيل الدخول
      * POST /api/v1/auth/login
-     * @param LoginRequest $request
-     * @return JsonResponse
      */
     public function login(LoginRequest $request): JsonResponse
     {
         try {
-            // ── Attempt authentication ────────────────────────────────────────
-            $credentials = $request->only('email', 'password');
-
-            if (!Auth::attempt($credentials)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid credentials.',
-                ], 401);
+            // Session Fixation Protection — regenerate before confirming identity
+            if ($request->hasSession()) {
+                $request->session()->regenerate();
             }
 
-            // ── Session Fixation Protection ───────────────────────────────────
-            // Regenerate the session ID immediately after a confirmed login.
-            // This invalidates any pre-authentication session ID that an
-            // attacker may have injected (OWASP A07: Session Fixation).
-            $request->session()->regenerate();
-
-            // ── Delegate token issuance to AuthService ────────────────────────
             $data = $this->authService->login($request->email, $request->password);
-
-            // ── Audit Log — Successful Login ──────────────────────────────────
-            $correlationId = $request->header('X-Correlation-ID')
-                          ?? $request->header('X-Request-ID')
-                          ?? (string) Str::uuid();
-
-            SystemLog::create([
-                'level'          => 'info',
-                'channel'        => 'audit',
-                'message'        => sprintf('[AUTH] Successful login — user_id: %d', Auth::id()),
-                'context'        => [
-                    'ip'         => $request->ip(),
-                    'user_agent' => $request->userAgent(),
-                    'email'      => $request->email,
-                ],
-                'correlation_id' => $correlationId,
-                'user_id'        => Auth::id(),
-                'module'         => 'AuthIdentity',
-                'request_uri'    => $request->getRequestUri(),
-                'duration_ms'    => null,
-            ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'تم تسجيل الدخول بنجاح',
-                'data'    => $data,
+                'data'    => [
+                    'token'      => $data['token'],
+                    'token_type' => 'Bearer',
+                    'user'       => [
+                        'user_id'   => $data['user']->user_id,
+                        'name'      => $data['user']->name,
+                        'email'     => $data['user']->email,
+                        'role'      => $data['user']->role,
+                        'is_active' => $data['user']->is_active,
+                    ],
+                ],
             ], 200);
 
         } catch (\Exception $e) {
+            $this->logService->logSecurity('failed_login_attempt', [
+                'email' => $request->email,
+                'ip'    => $request->ip(),
+            ], 'AuthIdentity');
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -92,99 +73,157 @@ class AuthController extends Controller
     }
 
     /**
-     * تسجيل الخروج (الجهاز الحالي فقط)
      * POST /api/v1/auth/logout
-     * @param Request $request
-     * @return JsonResponse
      */
     public function logout(Request $request): JsonResponse
     {
-        // TODO: Implement logout
-        // 1. $this->authService->logout($request->user()->user_id)
-        // 2. Return: response()->json(['success' => true, 'message' => 'تم تسجيل الخروج بنجاح'], 200)
-        // 3. Catch Exception
+        try {
+            $this->authService->logout($request->user()->user_id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم تسجيل الخروج بنجاح',
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
-     * تسجيل الخروج من جميع الأجهزة
      * POST /api/v1/auth/logout-all
-     * @param Request $request
-     * @return JsonResponse
      */
     public function logoutAll(Request $request): JsonResponse
     {
-        // TODO: Implement logout from all devices
-        // 1. $this->authService->logoutAll($request->user()->user_id)
-        // 2. Return success response
-        // 3. Catch Exception
+        try {
+            $this->authService->logoutAll($request->user()->user_id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم تسجيل الخروج من جميع الأجهزة',
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
-     * تحديث التوكن
      * POST /api/v1/auth/refresh
-     * @param Request $request
-     * @return JsonResponse
      */
     public function refreshToken(Request $request): JsonResponse
     {
-        // TODO: Implement token refresh
-        // 1. $data = $this->authService->refreshToken($request->user()->user_id)
-        // 2. Return new token in response
-        // 3. Catch Exception
+        try {
+            $data = $this->authService->refreshToken($request->user()->user_id);
+
+            return response()->json([
+                'success' => true,
+                'data'    => $data,
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
-     * طلب إعادة تعيين كلمة المرور
      * POST /api/v1/auth/forgot-password
-     * @param PasswordResetRequest $request
-     * @return JsonResponse
      */
     public function forgotPassword(PasswordResetRequest $request): JsonResponse
     {
-        // TODO: Implement forgot password
-        // 1. $this->authService->requestPasswordReset($request->email)
-        // 2. Return: response()->json(['success' => true, 'message' => 'تم إرسال رابط إعادة التعيين على بريدك'], 200)
-        // 3. Catch Exception
+        try {
+            $this->authService->requestPasswordReset($request->email);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'إذا كان البريد مسجلاً، ستصلك رسالة إعادة التعيين.',
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
-     * إعادة تعيين كلمة المرور
      * POST /api/v1/auth/reset-password
-     * @param PasswordResetRequest $request
-     * @return JsonResponse
      */
     public function resetPassword(PasswordResetRequest $request): JsonResponse
     {
-        // TODO: Implement reset password
-        // 1. $this->authService->resetPassword($request->token, $request->email, $request->password)
-        // 2. Return success response
-        // 3. Catch Exception
+        try {
+            $this->authService->resetPassword(
+                $request->token,
+                $request->email,
+                $request->password
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم تغيير كلمة المرور بنجاح. يرجى تسجيل الدخول.',
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     /**
-     * تغيير كلمة المرور (المستخدم المسجل)
      * POST /api/v1/auth/change-password
-     * @param PasswordResetRequest $request
-     * @return JsonResponse
      */
     public function changePassword(PasswordResetRequest $request): JsonResponse
     {
-        // TODO: Implement change password
-        // 1. $this->authService->changePassword($request->user()->user_id, $request->current_password, $request->password)
-        // 2. Return success response
-        // 3. Catch Exception
+        try {
+            $this->authService->changePassword(
+                $request->user()->user_id,
+                $request->current_password,
+                $request->password
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم تغيير كلمة المرور. يرجى تسجيل الدخول مجدداً.',
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     /**
-     * جلب بيانات المستخدم الحالي
      * GET /api/v1/auth/me
-     * @param Request $request
-     * @return JsonResponse
      */
     public function me(Request $request): JsonResponse
     {
-        // TODO: Return authenticated user data
-        // 1. $user = $request->user()->load(['roles', 'permissions'])
-        // 2. Return user data
+        $user = $request->user();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'user_id'    => $user->user_id,
+                'name'       => $user->name,
+                'email'      => $user->email,
+                'phone_no'   => $user->phone_no,
+                'role'       => $user->role,
+                'is_active'  => $user->is_active,
+                'created_at' => $user->created_at,
+            ],
+        ], 200);
     }
 }

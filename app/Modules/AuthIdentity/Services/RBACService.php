@@ -1,27 +1,33 @@
 <?php
 
 /**
- * @file: RBACService.php
- * @description: محرك التحكم في الوصول بناءً على الأدوار (AUTH-03 / fn37)
- * @module: AuthIdentity
- * @author: Team Leader (Khalid)
+ * @file RBACService.php
+ * @description محرك التحكم في الوصول بناءً على الأدوار — Role & Permission management
+ * @module AuthIdentity
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\AuthIdentity\Services;
 
 use App\Modules\AuthIdentity\Repositories\RoleRepository;
 use App\Modules\AuthIdentity\Repositories\UserRepository;
+use App\Modules\LoggingAudit\Services\AuditService;
 use Exception;
 
 class RBACService
 {
     protected RoleRepository $roleRepository;
     protected UserRepository $userRepository;
+    protected AuditService   $auditService;
 
-    public function __construct(RoleRepository $roleRepository, UserRepository $userRepository)
-    {
+    public function __construct(
+        RoleRepository $roleRepository,
+        UserRepository $userRepository,
+        AuditService   $auditService
+    ) {
         $this->roleRepository = $roleRepository;
         $this->userRepository = $userRepository;
+        $this->auditService   = $auditService;
     }
 
     /**
@@ -29,7 +35,7 @@ class RBACService
      */
     public function getAllRoles(int $perPage = 15)
     {
-        // TODO: return $this->roleRepository->paginate($perPage);
+        return $this->roleRepository->paginate($perPage);
     }
 
     /**
@@ -37,21 +43,28 @@ class RBACService
      */
     public function getRoleById(int $id)
     {
-        // TODO: return $this->roleRepository->findWithPermissions($id);
+        $role = $this->roleRepository->findByIdOrFail($id);
+        $role->load('permissions');
+        return $role;
     }
 
     /**
      * إنشاء دور جديد مع تعيين صلاحياته
-     * @param array $data  (name, slug, description, is_system_role, permissions[])
      */
     public function createRole(array $data)
     {
-        // TODO: Create role
-        // 1. Extract permissions: $permissions = $data['permissions'] ?? []
-        // 2. Remove permissions from data before create
-        // 3. $role = $this->roleRepository->create($data)
-        // 4. If permissions: $this->roleRepository->syncPermissions($role->role_id, $permissions)
-        // 5. return $role->load('permissions')
+        $permissions = $data['permissions'] ?? [];
+        unset($data['permissions']);
+
+        $role = $this->roleRepository->create($data);
+
+        if (!empty($permissions)) {
+            $role->permissions()->sync($permissions);
+        }
+
+        $this->auditService->log('created', 'role', $role->role_id, afterState: $data, module: 'AuthIdentity');
+
+        return $role->load('permissions');
     }
 
     /**
@@ -59,11 +72,22 @@ class RBACService
      */
     public function updateRole(int $id, array $data)
     {
-        // TODO: Update role
-        // 1. Extract permissions from data
-        // 2. $this->roleRepository->update($id, $data)
-        // 3. Sync permissions if provided
-        // 4. Return updated role
+        $before = $this->roleRepository->findByIdOrFail($id)->toArray();
+
+        $permissions = $data['permissions'] ?? null;
+        unset($data['permissions']);
+
+        $this->roleRepository->update($id, $data);
+
+        $role = $this->roleRepository->findByIdOrFail($id);
+
+        if ($permissions !== null) {
+            $role->permissions()->sync($permissions);
+        }
+
+        $this->auditService->log('updated', 'role', $id, beforeState: $before, afterState: $data, module: 'AuthIdentity');
+
+        return $role->load('permissions');
     }
 
     /**
@@ -71,11 +95,23 @@ class RBACService
      */
     public function deleteRole(int $id): bool
     {
-        // TODO: Delete role
-        // 1. $role = $this->roleRepository->findByIdOrFail($id)
-        // 2. If $role->is_system_role → throw Exception('لا يمكن حذف الأدوار النظامية')
-        // 3. Detach all permissions and users
-        // 4. return $this->roleRepository->delete($id)
+        $role = $this->roleRepository->findByIdOrFail($id);
+
+        if ($role->is_system_role) {
+            throw new Exception('لا يمكن حذف الأدوار النظامية');
+        }
+
+        $before = $role->toArray();
+
+        // Detach all users and permissions before deleting
+        $role->users()->detach();
+        $role->permissions()->detach();
+
+        $result = $this->roleRepository->delete($id);
+
+        $this->auditService->log('deleted', 'role', $id, beforeState: $before, module: 'AuthIdentity');
+
+        return $result;
     }
 
     /**
@@ -83,34 +119,47 @@ class RBACService
      */
     public function getNonSystemRoles()
     {
-        // TODO: return $this->roleRepository->getNonSystemRoles();
+        return $this->roleRepository->findAllBy(['is_system_role' => false]);
     }
 
     /**
-     * التحقق من صلاحية معينة للمستخدم (AUTH-03)
-     * @param int $userId
-     * @param string $permissionSlug
-     * @return bool
+     * التحقق من صلاحية معينة للمستخدم (role-based check)
      */
     public function hasPermission(int $userId, string $permissionSlug): bool
     {
-        // TODO: Check user permission
-        // 1. Get user with roles and permissions
-        // 2. Check direct user permissions
-        // 3. Check role-based permissions
-        // 4. Return bool
+        $user = $this->userRepository->findById($userId);
+
+        if (!$user) {
+            return false;
+        }
+
+        // Check direct user permissions
+        if ($user->permissions()->where('slug', $permissionSlug)->exists()) {
+            return true;
+        }
+
+        // Check role-based permissions
+        return $user->roles()
+            ->whereHas('permissions', fn ($q) => $q->where('slug', $permissionSlug))
+            ->exists();
     }
 
     /**
-     * تعيين دور لمستخدم
-     * @param int $userId
-     * @param int $roleId
+     * تعيين دور لمستخدم (لا يزيل الأدوار الحالية)
      */
     public function assignRoleToUser(int $userId, int $roleId): bool
     {
-        // TODO: Assign role to user
-        // 1. Find user and role
-        // 2. $user->roles()->syncWithoutDetaching([$roleId])
-        // 3. Return true
+        $user = $this->userRepository->findByIdOrFail($userId);
+        $role = $this->roleRepository->findByIdOrFail($roleId);
+
+        $user->roles()->syncWithoutDetaching([$roleId]);
+
+        $this->auditService->log(
+            'role_assigned', 'user', $userId,
+            afterState: ['role_id' => $roleId, 'role_name' => $role->name],
+            module: 'AuthIdentity'
+        );
+
+        return true;
     }
 }

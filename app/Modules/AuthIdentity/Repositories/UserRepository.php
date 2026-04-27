@@ -1,10 +1,10 @@
 <?php
 
 /**
- * @file: UserRepository.php
- * @description: مستودع بيانات المستخدمين - Auth & Identity Service
- * @module: AuthIdentity
- * @author: Team Leader (Khalid)
+ * @file UserRepository.php
+ * @description مستودع بيانات المستخدمين — كل عمليات users table
+ * @module AuthIdentity
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\AuthIdentity\Repositories;
@@ -22,97 +22,84 @@ class UserRepository extends BaseRepository
 
     /**
      * البحث عن مستخدم بالإيميل
-     * @param string $email
-     * @return User|null
      */
     public function findByEmail(string $email): ?User
     {
-        // TODO: Return user by email
-        // return $this->model->where('email', $email)->first();
+        return $this->model->where('email', $email)->first();
     }
 
     /**
-     * الحصول على المستخدمين النشطين
-     * @return Collection
+     * جلب المستخدمين النشطين
      */
     public function getActiveUsers(): Collection
     {
-        // TODO: Return all active users
-        // return $this->model->active()->get();
+        return $this->model->active()->get();
     }
 
     /**
-     * الحصول على السائقين النشطين
-     * @return Collection
+     * جلب السائقين النشطين
      */
     public function getDrivers(): Collection
     {
-        // TODO: Return all active drivers
-        // return $this->model->active()->driver()->get();
+        return $this->model->active()->byRole('Driver')->get();
     }
 
     /**
-     * الحصول على الموزعين
-     * @return Collection
+     * جلب الموزعين
      */
     public function getDispatchers(): Collection
     {
-        // TODO: Return all dispatchers
-        // return $this->model->active()->dispatcher()->get();
+        return $this->model->active()->byRole('Dispatcher')->get();
     }
 
     /**
-     * الحصول على مديري الأسطول
-     * @return Collection
+     * جلب مديري الأسطول
      */
     public function getFleetManagers(): Collection
     {
-        // TODO: Return all fleet managers
-        // return $this->model->active()->fleetManager()->get();
+        return $this->model->active()->byRole('FleetManager')->get();
     }
 
     /**
-     * الحصول على الميكانيكيين
-     * @return Collection
+     * جلب الميكانيكيين
      */
     public function getMechanics(): Collection
     {
-        // TODO: Return all mechanics
-        // return $this->model->active()->mechanic()->get();
+        return $this->model->active()->byRole('Mechanic')->get();
     }
 
     /**
      * تحديث عدد محاولات الدخول الفاشلة
-     * @param int $userId
-     * @param int $attempts
-     * @return bool
      */
     public function updateFailedAttempts(int $userId, int $attempts): bool
     {
-        // TODO: Update failed_login_attempts for the user
-        // return $this->update($userId, ['failed_login_attempts' => $attempts]);
+        return $this->update($userId, ['failed_login_attempts' => $attempts]);
     }
 
     /**
-     * قفل حساب المستخدم
-     * @param int $userId
-     * @param \DateTime $until
-     * @return bool
+     * قفل حساب المستخدم مؤقتاً
      */
     public function lockUser(int $userId, \DateTime $until): bool
     {
-        // TODO: Set locked_until for the user
-        // return $this->update($userId, ['locked_until' => $until, 'status' => 'locked']);
+        return $this->update($userId, ['locked_until' => $until, 'is_active' => false]);
     }
 
     /**
-     * تحديث آخر تسجيل دخول
-     * @param int $userId
-     * @return bool
+     * تحديث آخر تسجيل دخول وإعادة تعيين محاولات الفشل
      */
     public function updateLastLogin(int $userId): bool
     {
-        // TODO: Update last_login_at to now
-        // return $this->update($userId, ['last_login_at' => now(), 'failed_login_attempts' => 0]);
+        return $this->update($userId, [
+            'last_login_at'          => now(),
+            'failed_login_attempts'  => 0,
+        ]);
+    }
+
+    /**
+     * تغيير حالة المستخدم
+     */
+    public function setActive(int $userId, bool $isActive): bool
+    {
+        return $this->update($userId, ['is_active' => $isActive]);
     }
 }
