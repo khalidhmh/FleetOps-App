@@ -1,83 +1,83 @@
 <?php
 
 /**
- * @file: Route.php
- * @description: نموذج Eloquent للمسارات - Route & Dispatch Service
- * @module: RouteDispatch
- * @author: Team Leader (Khalid)
+ * @file Route.php
+ * @description Eloquent Model for the routes table — RouteDispatch Module
+ * @module RouteDispatch
+ * @table routes
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\RouteDispatch\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Modules\AuthIdentity\Models\Driver;
+use App\Modules\AuthIdentity\Models\Dispatcher;
 
 class Route extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory;
 
-    protected $table = 'routes';
+    protected $table      = 'routes';
     protected $primaryKey = 'route_id';
-    public $incrementing = true;
+    protected $keyType    = 'int';
+    public $incrementing  = true;
 
+    // DDL has CreatedAt only (no UpdatedAt)
+    const UPDATED_AT = null;
+    const CREATED_AT = 'created_at';
+
+    /** @var array<string> */
     protected $fillable = [
-        'vehicle_id',
+        'route_name',
         'driver_id',
-        'status',       // planned | active | completed | cancelled
-        'shift',        // morning | evening | night
-        'total_distance_km',
+        'dispatcher_id',
+        'vehicle_id',
+        'scheduled_start_time',
+        'actual_start_time',
+        'scheduled_end_time',
+        'status',
+        'total_distance',
         'total_stops',
-        'estimated_duration_min',
-        'version',
-        'started_at',
-        'completed_at',
-        'notes',
-        'created_by',
+        'fuel_consumption_est',
+        'created_at',
     ];
 
+    /** @var array<string, string> */
     protected $casts = [
-        'total_distance_km'      => 'float',
-        'total_stops'            => 'integer',
-        'estimated_duration_min' => 'integer',
-        'version'                => 'integer',
-        'started_at'             => 'datetime',
-        'completed_at'           => 'datetime',
-        'created_at'             => 'datetime',
-        'updated_at'             => 'datetime',
-        'deleted_at'             => 'datetime',
+        'scheduled_start_time'  => 'datetime',
+        'actual_start_time'     => 'datetime',
+        'scheduled_end_time'    => 'datetime',
+        'total_distance'        => 'float',
+        'fuel_consumption_est'  => 'float',
+        'total_stops'           => 'integer',
+        'created_at'            => 'datetime',
     ];
-
-    protected $attributes = [
-        'status'  => 'planned',
-        'version' => 1,
-    ];
-
-    // ─── Scopes ───────────────────────────────────────────────────────────────
-
-    public function scopePlanned($query)  { return $query->where('status', 'planned'); }
-    public function scopeActive($query)   { return $query->where('status', 'active'); }
-    public function scopeCompleted($query){ return $query->where('status', 'completed'); }
-
-    public function scopeForDriver($query, int $driverId)
-    {
-        return $query->where('driver_id', $driverId);
-    }
-
-    public function scopeForVehicle($query, int $vehicleId)
-    {
-        return $query->where('vehicle_id', $vehicleId);
-    }
 
     // ─── Relationships ────────────────────────────────────────────────────────
 
-    public function stops()
+    /** Driver assigned to this route */
+    public function driver()
     {
-        return $this->hasMany(RouteStop::class, 'route_id', 'route_id')->orderBy('sequence');
+        return $this->belongsTo(Driver::class, 'driver_id', 'driver_id');
     }
 
+    /** Dispatcher who planned this route */
+    public function dispatcher()
+    {
+        return $this->belongsTo(Dispatcher::class, 'dispatcher_id', 'dispatcher_id');
+    }
+
+    /** Vehicle assigned to this route */
     public function vehicle()
     {
         return $this->belongsTo(Vehicle::class, 'vehicle_id', 'vehicle_id');
+    }
+
+    /** All stops on this route */
+    public function stops()
+    {
+        return $this->hasMany(RouteStop::class, 'route_id', 'route_id')->orderBy('stop_no');
     }
 }

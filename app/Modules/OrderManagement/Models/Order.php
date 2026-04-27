@@ -1,95 +1,90 @@
 <?php
 
 /**
- * @file: Order.php
- * @description: نموذج Eloquent للطلبات - Order Management Service
- * @module: OrderManagement
- * @author: Team Leader (Khalid)
+ * @file Order.php
+ * @description Eloquent Model for the orders table — OrderManagement Module
+ * @module OrderManagement
+ * @table orders
+ *
+ * NOTE: order_id is NOT auto-incremented — IDs are assigned externally per DDL.
+ *
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\OrderManagement\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Modules\AuthIdentity\Models\Customer;
+use App\Modules\AuthIdentity\Models\Driver;
+use App\Modules\RouteDispatch\Models\RouteStop;
+use App\Modules\ReportingAnalytics\Models\CashLedger;
 
 class Order extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory;
 
-    protected $table = 'orders';
+    protected $table      = 'orders';
     protected $primaryKey = 'order_id';
-    public $incrementing = true;
+    protected $keyType    = 'int';
+    public $incrementing  = false; // No IDENTITY in DDL — externally assigned
 
+    // DDL has created_at only (no updated_at)
+    const UPDATED_AT = null;
+    const CREATED_AT = 'created_at';
+
+    /** @var array<string> */
     protected $fillable = [
-        'customer_name',
-        'customer_phone',
-        'customer_email',
-        'delivery_address',
-        'lat',
-        'lng',
-        'weight_kg',
-        'volume_m3',
-        'payment_type',     // prepaid | COD
-        'cod_amount',
-        'status',           // pending | in_transit | delivered | returned | failed
-        'failure_reason',
-        'failure_reason_code',
-        'priority',         // normal | express
-        'promised_window_start',
-        'promised_window_end',
-        'delivery_preference',
-        'qr_code',
-        'route_id',
+        'order_id',
         'driver_id',
-        'import_batch_id',
-        'retry_count',
-        'notes',
+        'customer_id',
+        'status',
+        'eta',
+        'delivery_time',
+        'priority',
+        'price',
+        'digital_signature',
+        'delivery_preference',
+        'payment_method',
+        'created_at',
     ];
 
+    /** @var array<string, string> */
     protected $casts = [
-        'lat'                    => 'float',
-        'lng'                    => 'float',
-        'weight_kg'              => 'float',
-        'volume_m3'              => 'float',
-        'cod_amount'             => 'float',
-        'retry_count'            => 'integer',
-        'promised_window_start'  => 'datetime',
-        'promised_window_end'    => 'datetime',
-        'created_at'             => 'datetime',
-        'updated_at'             => 'datetime',
-        'deleted_at'             => 'datetime',
+        'price'         => 'integer',
+        'delivery_time' => 'datetime',
+        'created_at'    => 'datetime',
     ];
-
-    // Valid status transitions (State Machine)
-    // pending → in_transit → delivered
-    //                      → returned
-    //                      → failed
-
-    protected $attributes = [
-        'status'      => 'pending',
-        'priority'    => 'normal',
-        'retry_count' => 0,
-    ];
-
-    // ─── Scopes ───────────────────────────────────────────────────────────────
-
-    public function scopePending($query)    { return $query->where('status', 'pending'); }
-    public function scopeInTransit($query)  { return $query->where('status', 'in_transit'); }
-    public function scopeDelivered($query)  { return $query->where('status', 'delivered'); }
-    public function scopeExpress($query)    { return $query->where('priority', 'express'); }
-    public function scopeForRoute($query, int $routeId) { return $query->where('route_id', $routeId); }
-    public function scopeForDriver($query, int $driverId) { return $query->where('driver_id', $driverId); }
-
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-
-    public function isCOD(): bool { return $this->payment_type === 'COD'; }
-    public function isExpress(): bool { return $this->priority === 'express'; }
 
     // ─── Relationships ────────────────────────────────────────────────────────
 
-    public function proofOfDelivery()
+    /** Customer who placed this order */
+    public function customer()
     {
-        return $this->hasOne(ProofOfDelivery::class, 'order_id', 'order_id');
+        return $this->belongsTo(Customer::class, 'customer_id', 'customer_id');
+    }
+
+    /** Driver assigned to deliver this order */
+    public function driver()
+    {
+        return $this->belongsTo(Driver::class, 'driver_id', 'driver_id');
+    }
+
+    /** Parcels contained within this order */
+    public function parcels()
+    {
+        return $this->hasMany(Parcel::class, 'order_id', 'order_id');
+    }
+
+    /** Route stop(s) associated with this order */
+    public function routeStops()
+    {
+        return $this->hasMany(RouteStop::class, 'order_id', 'order_id');
+    }
+
+    /** Cash ledger entries for this order */
+    public function cashLedgerEntries()
+    {
+        return $this->hasMany(CashLedger::class, 'order_id', 'order_id');
     }
 }

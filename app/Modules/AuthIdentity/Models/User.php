@@ -1,66 +1,62 @@
 <?php
 
 /**
- * @file: User.php
- * @description: نموذج Eloquent للمستخدمين - Auth & Identity Service
- * @module: AuthIdentity
- * @author: Team Leader (Khalid)
+ * @file User.php
+ * @description Eloquent Model for the users table — AuthIdentity Module
+ * @module AuthIdentity
+ * @table users
+ * @author Team Leader (Khalid)
  */
 
 namespace App\Modules\AuthIdentity\Models;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    use HasApiTokens, HasFactory, SoftDeletes;
+    use HasApiTokens, HasFactory;
 
-    protected $table = 'users';
+    protected $table      = 'users';
     protected $primaryKey = 'user_id';
-    protected $keyType = 'int';
-    public $incrementing = true;
+    protected $keyType    = 'int';
+    public $incrementing  = true;
 
+    // Eloquent uses created_at / updated_at by default — matches DDL columns
+    public $timestamps = true;
+
+    const CREATED_AT = 'created_at';
+    const UPDATED_AT = 'updated_at';
+
+    /** @var array<string> */
     protected $fillable = [
-        'name',
         'email',
-        'phone',
-        'password',
+        'password',   // DDL: PasswordHash — normalized for Laravel Auth
+        'name',
+        'phone_no',
         'role',
-        'employee_id',
-        'license_type',
-        'status',
-        'last_login_at',
-        'failed_login_attempts',
-        'locked_until',
-        'created_by',
-        'updated_by',
+        'is_active',
     ];
 
-    protected $hidden = ['password', 'remember_token', 'deleted_at'];
+    /** @var array<string> */
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
 
+    /** @var array<string, string> */
     protected $casts = [
+        'is_active'  => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
-        'last_login_at' => 'datetime',
-        'locked_until' => 'datetime',
-        'failed_login_attempts' => 'integer',
-    ];
-
-    protected $attributes = [
-        'status' => 'active',
-        'failed_login_attempts' => 0,
     ];
 
     // ─── Scopes ───────────────────────────────────────────────────────────────
 
     public function scopeActive($query)
     {
-        return $query->where('status', 'active');
+        return $query->where('is_active', true);
     }
 
     public function scopeByRole($query, string $role)
@@ -68,47 +64,47 @@ class User extends Authenticatable
         return $query->where('role', $role);
     }
 
-    public function scopeDriver($query)
-    {
-        return $query->where('role', 'driver');
-    }
-
-    public function scopeDispatcher($query)
-    {
-        return $query->where('role', 'dispatcher');
-    }
-
-    public function scopeFleetManager($query)
-    {
-        return $query->where('role', 'fleet_manager');
-    }
-
-    public function scopeMechanic($query)
-    {
-        return $query->where('role', 'mechanic');
-    }
-
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    // ─── Helper Methods ───────────────────────────────────────────────────────
 
     public function isActive(): bool
     {
-        return $this->status === 'active';
+        return (bool) $this->is_active;
     }
 
-    public function isLocked(): bool
+    public function hasRole(string $role): bool
     {
-        return $this->locked_until && $this->locked_until->isFuture();
+        return $this->role === $role;
     }
 
-    // ─── Relationships ────────────────────────────────────────────────────────
+    // ─── Relationships — Role Profiles ────────────────────────────────────────
 
-    public function roles()
+    /** The customer profile linked to this user (role = Customer) */
+    public function customer()
     {
-        return $this->belongsToMany(Role::class, 'user_roles', 'user_id', 'role_id');
+        return $this->hasOne(Customer::class, 'customer_id', 'user_id');
     }
 
-    public function permissions()
+    /** The driver profile linked to this user (role = Driver) */
+    public function driver()
     {
-        return $this->belongsToMany(Permission::class, 'user_permissions', 'user_id', 'permission_id');
+        return $this->hasOne(Driver::class, 'driver_id', 'user_id');
+    }
+
+    /** The dispatcher profile linked to this user (role = Dispatcher) */
+    public function dispatcher()
+    {
+        return $this->hasOne(Dispatcher::class, 'dispatcher_id', 'user_id');
+    }
+
+    /** The fleet manager profile linked to this user (role = FleetManager) */
+    public function fleetManager()
+    {
+        return $this->hasOne(FleetManager::class, 'fleet_manager_id', 'user_id');
+    }
+
+    /** The mechanic profile linked to this user (role = Mechanic) */
+    public function mechanic()
+    {
+        return $this->hasOne(Mechanic::class, 'mechanic_id', 'user_id');
     }
 }
